@@ -1,0 +1,910 @@
+---
+title: "MLPH Final Project"
+author: "Monal Daterao, Devin Nathan"
+date: "2025-04-14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load Libraries
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readr)
+library(caret)
+library(MASS)
+library(boot)
+library(glmnet)
+library(caret)
+library(plotmo)
+library(tree)
+library(randomForest)
+```
+
+### Load Data
+```{r}
+aqi_health <- read.csv("air_quality_health_impact_data.csv")
+
+## Add binary HealthImpactScore variable:
+aqi_health$HealthImpactBinary <- ifelse(aqi_health$HealthImpactScore >= 80, 1, 0)
+# Histogram of HealthImpactBinary distribution
+histogram(aqi_health$HealthImpactBinary)
+#Table of HealthImpactBinary
+table(aqi_health$HealthImpactBinary)
+```
+
+### Creation of binary HealthImpactClass Variable: HealthImpactBinary
+
+Created a variable that dichotomized HealthImpactScore, which ranges from 0-100. We used the cut-off score of 80 for the binary variable because the HealthImpactScore values were very high overall. Doing this moderately helped to address the class imbalance we observed whent he cut-off score of 50 was used. However there is still class imbalance; High: 86%, Low: 14%
+
+# Exploratory Data Analysis
+
+Data exploration was conducted on the predictor variables and outcome variables. Mean, Median, and Standard deviation of each variable was investigated. For the categorical variable of HealthImpactClass, the frequency and percentages were investigated. A histogram and bar plot were created for each to visually investigate the data.
+
+```{r}
+exploratory_analysis <- tibble("Value" = c("AQI", "PM10", "PM2_5", "NO2",
+                                           "SO2", "O3", "Temperature", "Humidity",
+                                           "WindSpeed", "RespiratoryCases",
+                                           "CardiovascularCases", "HospitalAdmissions",
+                                           "HealthImpactScore"),
+                               "mean" = c(mean(aqi_health$AQI),
+                                              mean(aqi_health$PM10),
+                                              mean(aqi_health$PM2_5),
+                                              mean(aqi_health$NO2),
+                                              mean(aqi_health$SO2),
+                                              mean(aqi_health$O3),
+                                              mean(aqi_health$Temperature),
+                                              mean(aqi_health$Humidity),
+                                              mean(aqi_health$WindSpeed),
+                                              mean(aqi_health$RespiratoryCases),
+                                              mean(aqi_health$CardiovascularCases),
+                                              mean(aqi_health$HospitalAdmissions),
+                                              mean(aqi_health$HealthImpactScore)),
+                               "median" = c(median(aqi_health$AQI),
+                                              median(aqi_health$PM10),
+                                              median(aqi_health$PM2_5),
+                                              median(aqi_health$NO2),
+                                              median(aqi_health$SO2),
+                                              median(aqi_health$O3),
+                                              median(aqi_health$Temperature),
+                                              median(aqi_health$Humidity),
+                                            median(aqi_health$WindSpeed),
+                                              median(aqi_health$RespiratoryCases),
+                                              median(aqi_health$CardiovascularCases),
+                                              median(aqi_health$HospitalAdmissions),
+                                            median(aqi_health$HealthImpactScore)),
+                               "sd" = c(sd(aqi_health$AQI),
+                                              sd(aqi_health$PM10),
+                                              sd(aqi_health$PM2_5),
+                                              sd(aqi_health$NO2),
+                                              sd(aqi_health$SO2),
+                                              sd(aqi_health$O3),
+                                              sd(aqi_health$Temperature),
+                                              sd(aqi_health$Humidity),
+                                        sd(aqi_health$WindSpeed),
+                                              sd(aqi_health$RespiratoryCases),
+                                              sd(aqi_health$CardiovascularCases),
+                                              sd(aqi_health$HospitalAdmissions),
+                                        sd(aqi_health$HealthImpactScore)))
+
+exploratory_analysis
+
+# Plot of the distribution of Health Impact Class
+ggplot(data = aqi_health, mapping = aes(HealthImpactScore)) +
+  geom_histogram(binwidth = 5, fill = "purple") +
+  ggtitle("Distribution of HealthImpactScore") +
+  theme_minimal()
+
+# Plot of the distribution of Health Impact Class
+ggplot(data = aqi_health, mapping = aes(HealthImpactClass)) +
+  geom_bar(fill = "purple") +
+  ggtitle("Distribution of HealthImpactClass") +
+  theme_minimal()
+
+# Table of the percentages of Health Impact Class
+n_tot <- nrow(aqi_health)
+
+Health_Impact_percent <- aqi_health %>% 
+  count(HealthImpactClass)
+
+Health_Impact_percent <- Health_Impact_percent %>% 
+  mutate(percentage = n/n_tot)
+
+Health_Impact_percent
+```
+
+# Training and Testing Set
+The data was split into 80% training and 20% testing. The output confirms data was split correctly.
+
+```{r}
+n <- nrow(aqi_health)
+
+n_20 <- n * .80
+
+aqi_health_train <- aqi_health[(1:n_20), ]
+aqi_health_test <- aqi_health[-(1:n_20), ]
+
+# Double check the numbers
+nrow(aqi_health_train)
+nrow(aqi_health_test)
+
+```
+
+# Lasso Regression
+Perform a Lasso regression on the standardized data to see which features are most prominent
+
+### Standardization of data
+```{r warning=FALSE}
+#drop the RecordID (1), HealthImpactScore (14), and HealthImpactClass(15)
+x_train <- as.matrix(aqi_health_train[ , -c(1, 14, 15, 16)])
+                                   
+#Keep only the HealthImpactScore(14) - Predictor
+# Return vectors only with attributes
+y_train <- aqi_health_train[, 14, drop = T]
+
+#Do the same steps for the test data
+x_test <- as.matrix(aqi_health_test[, -c(1, 14, 15, 16)])
+y_test <- aqi_health_test[, 14, drop = T] 
+
+standardized_fit <- preProcess(x_train, method = c("center", "scale"))
+x_train_standardized <- predict(standardized_fit, x_train)
+x_test_standardized <- predict(standardized_fit, x_test)
+```
+
+
+### Training and Testing Error
+```{r}
+set.seed(0)
+cv_fit_lasso <- cv.glmnet(x_train, y_train)
+train_pred <- predict(cv_fit_lasso, newx = x_train)
+test_pred <- predict(cv_fit_lasso, newx = x_test)
+train_error <- mean((train_pred - y_train)^2)
+test_error <- mean((test_pred - y_test)^2)
+
+lasso_table <- data.frame("Error Type" = c("Training", "Testing"),
+                          "Value" = c(train_error, test_error))
+lasso_table
+```
+
+### Coefficients
+Obtain the cofficients from the lasso regression that were useful and their weights associated with each.
+
+```{r}
+coef(cv_fit_lasso)
+```
+
+# Regression Methods
+
+## Linear Regression
+Two Linear Regression models were fit. The first linear regression model was fit with all of the predictors besides the RecordID, HealthImpactClass, and HealthImpactBinary. RecordID is an identifier for each of the data's covariates and HealthImpactClass/HealthImpactBinary is another Target Variable. The second linear regression model was fit with only the predictors identified by the lasso regression. Lasso regression does automatic feature selection so the features that were not selected in the lasso were not included within the second model. From the lasso regression we see the variables AQI, PM10, PM2_5, NO2, and O3 are the most prominent features that effect the HealthImpactScore outcome. Both models will have their train and test score evaluated.
+
++ Model 1: All coefficients besides RecordID, HealthImpactClass, and HealthImpactBinary
++ Model 2: Select coefficients from Lasso Regression
+
+### Linear Regression: Model 1
+Model 1 is fit with all coefficients
+
+### Model Setup
+```{r}
+lm_model_1_HealthImpactScore_fit <- lm(HealthImpactScore ~ . -RecordID - HealthImpactClass -HealthImpactBinary, data = aqi_health_train)
+```
+
+### Model 1 Training & Testing Error
+```{r}
+# Training error
+pred_HIS_train <- predict(lm_model_1_HealthImpactScore_fit, newdata = aqi_health_train)
+    
+train_error_mse <- mean((pred_HIS_train - aqi_health_train$HealthImpactScore)^2)
+
+# Testing error
+pred_HIS_test <- predict(lm_model_1_HealthImpactScore_fit, newdata = aqi_health_test)
+    
+test_error_mse <- mean((pred_HIS_test - aqi_health_test$HealthImpactScore)^2)
+
+# Output Table
+lm_model_1_table <- data.frame("Error_Type" = c("Training", "Testing"),
+                               "Value" = c(train_error_mse, test_error_mse))
+lm_model_1_table
+```
+
+### Linear Regression: Model 2
+Model 2 is fit with the AQI, PM10, PM2_5, NO2, and O3 coefficients as identified by the lasso regression.
+
+Definitions:
++ HIS (Health Impact Score)
+
+### Model 2 Setup
+```{r}
+lm_model_2_HealthImpactScore_fit <- lm(HealthImpactScore ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train)
+```
+
+
+### Model 2 Training & Testing Error
+```{r}
+# Training error
+pred_HIS_train <- predict(lm_model_2_HealthImpactScore_fit, newdata = aqi_health_train)
+
+train_error_mse <- mean((pred_HIS_train - aqi_health_train$HealthImpactScore)^2)
+
+#Testing error
+pred_HIS_test <- predict(lm_model_2_HealthImpactScore_fit, newdata = aqi_health_test)
+    
+test_error_mse <- mean((pred_HIS_test - aqi_health_test$HealthImpactScore)^2)
+
+# Output
+
+lm_model_2_table <- data.frame("Error_Type" = c("Training", "Testing"),
+                               "Value" = c(train_error_mse, test_error_mse))
+lm_model_2_table
+```
+
+## KNN Regression
+Because KNN Regression is based on distances, we will use the standardized data from the Lasso regression section and rerun it here to ensure proper standardization.
+
+### Standardization of data
+```{r warning=FALSE}
+fit_knn_std <- preProcess(aqi_health_train, method = "scale")
+aqi_health_train_std <- predict(fit_knn_std, newdata = aqi_health_train)
+aqi_health_test_std <- predict(fit_knn_std, newdata = aqi_health_test)
+```
+
+### Model 1 Setup, Training Error, Testing Error
+
+Model 1 was fit with all the predictor variables on the standardized data. MSE was used to evaluate the training and testing error.
+```{r}
+# Fit the model 
+knn_model_1_fit <- knnreg(HealthImpactScore ~. -HealthImpactClass - RecordID -HealthImpactBinary, data = aqi_health_train_std, k = 10)
+
+# Evaluate the training error  
+y_train_hat <- predict(knn_model_1_fit, newdata = aqi_health_train_std)
+training_error <- sum((aqi_health_train_std$HealthImpactScore - y_train_hat)^2)
+
+# Evaluate the testing error
+y_test_hat <- predict(knn_model_1_fit, newdata = aqi_health_test_std)
+testing_error <- sum((aqi_health_test_std$HealthImpactScore - y_test_hat)^2)
+
+table <- data.frame("Error" = c("Training", "Testing"),
+                    "Value" = c(training_error, testing_error))
+table
+```
+
+### Model 2 Setup, Training Error, Testing Error
+
+Model 2 was fit with the selected predictor variables on the standardized data. MSE was used to evaluate the training and testing error.
+
+```{r}
+# Fit the model 
+knn_model_2_fit <- knnreg(HealthImpactScore ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train_std, k = 10)
+
+# Evaluate the training error  
+y_train_hat <- predict(knn_model_2_fit, newdata = aqi_health_train_std)
+training_error <- sum((aqi_health_train_std$HealthImpactScore - y_train_hat)^2)
+
+# Evaluate the testing error
+y_test_hat <- predict(knn_model_2_fit, newdata = aqi_health_test_std)
+testing_error <- sum((aqi_health_test_std$HealthImpactScore - y_test_hat)^2)
+
+table <- data.frame("Error" = c("Training", "Testing"),
+                    "Value" = c(training_error, testing_error))
+table
+```
+
+## Decision Trees
+The decision trees are fit the same way as linear regression, and KNN regression. Model 1 will include all of the coefficients besides the RecordId and the HealthImpactClass. Model 2 will only include the variables identified by Lasso Regression.
+
+### Cross-validation for Decision Trees to predict HealthImpactScore
+
+Similar to all the other techniques we present two different models in which we compute the cross validation.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactBinary
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Decision Tree - Cross Validation
+
+The terminal node size was calculated using cross validation techniques. These terminal nodes were then used in the final pruned tree. From the pruned tree, the MSE was used to evaluate the training and testing error.
+
+The seed was set to (0) for all models for reproducibility.
+
+```{r}
+#set seed to zero for reproducibility
+set.seed(0)
+
+#fit the tree
+HIS_tree_model_1 <- tree(HealthImpactScore ~ . -RecordID - HealthImpactClass -HealthImpactBinary, data = aqi_health_train)
+
+#use cross validation to understand the best terminal node size
+cv_HIS <- cv.tree(HIS_tree_model_1)
+
+#create a dataframe with the size and deviation
+cv_HIS_df <- data.frame(size = cv_HIS$size, deviance = cv_HIS$dev)
+
+#find the best terminal node size
+best_size <- cv_HIS$size[which.min(cv_HIS$dev)]
+
+#plot to visually see the best size
+ggplot(cv_HIS_df, mapping = aes(x = size, y = deviance)) + 
+  geom_point(size = 3) + 
+  geom_line() +
+  geom_vline(xintercept = best_size, col = "red")
+```
+
+### Visualizing the pruned regression tree
+
+The pruned regression tree for Model 1 is visualized.
+
+```{r}
+HIS_tree_final <- prune.tree(HIS_tree_model_1, best = best_size) #The best_size identified by the above plot and output is used
+plot(HIS_tree_final)
+text(HIS_tree_final)
+```
+
+### Compute the training and testing error
+
+MSE was used to compute the training and testing error on the Model 1 pruned tree.
+
+```{r}
+# Training Error
+pred_HIS <- predict(HIS_tree_final, newdata = aqi_health_train)
+train_error <- mean((pred_HIS - aqi_health_train$HealthImpactScore)^2)
+
+#Testing Error
+pred_HIS <- predict(HIS_tree_final, newdata = aqi_health_test)
+test_error <- mean((pred_HIS - aqi_health_test$HealthImpactScore)^2)
+
+table <- data.frame("Error Type" = c("Training", "Testing"),
+                    "Value" = c(train_error, test_error))
+table
+```
+
+
+### Model 2 Decision Tree - Cross Validation
+
+The terminal node size was calculated using cross validation techniques for the predictors within Model 2. These terminal nodes were then used in the final pruned tree. From the pruned tree, the MSE was used to evaluate the training and testing error.
+
+The seed was set to (0) for all models for reproducibility.
+
+```{r}
+#set seed to zero for reproducibility
+set.seed(0)
+
+#fit the tree to model 2
+HIS_tree_model_2 <- tree(HealthImpactScore ~  AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train)
+
+#use cross validation to understand the best terminal node size
+cv_HIS_ltd <- cv.tree(HIS_tree_model_2)
+
+#create a dataframe with the size and deviation to find the best terminal node size
+cv_HIS_ltd_df <- data.frame(size = cv_HIS_ltd$size, deviance = cv_HIS_ltd$dev)
+
+#find the best terminal node size
+best_size <- cv_HIS_ltd$size[which.min(cv_HIS_ltd$dev)]
+
+#plot to visually see the best size
+ggplot(cv_HIS_ltd_df, mapping = aes(x = size, y = deviance)) + 
+  geom_point(size = 3) + 
+  geom_line() +
+  geom_vline(xintercept = best_size, col = "red")
+```
+
+
+### Visualizing the pruned regression tree
+```{r}
+HIS_tree_final_model_2 <- prune.tree(HIS_tree_model_2, best = best_size) #The subtree with best_size terminal nodes
+plot(HIS_tree_final_model_2)
+text(HIS_tree_final_model_2)
+```
+
+### Compute the training and test error
+```{r}
+#Training Error
+pred_HIS <- predict(HIS_tree_final_model_2, newdata = aqi_health_train)
+train_error <- mean((pred_HIS - aqi_health_train$HealthImpactScore)^2)
+
+#Testing Error
+pred_HIS <- predict(HIS_tree_final_model_2, newdata = aqi_health_test)
+test_error <- mean((pred_HIS - aqi_health_test$HealthImpactScore)^2)
+
+table <- data.frame("Error Type" = c("Training", "Testing"),
+                    "Value" = c(train_error, test_error))
+table
+```
+
+
+## Bagging
+
+Similar to all the other techniques we present two different models in which we compute the bagging. For bagging we set p as equal to the number of predictors and specify 'mtry' as the number of variables randomly assigned as candidates for each split.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactBinary
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+p <- ncol(aqi_health_train) - 4 #set p to the number of predictors. In this case it is 12 because we remove HIS, HIC, HIB and RecordID
+##Setting mtry = p for bagging
+bag_aqi_health <- randomForest(HealthImpactScore ~. -RecordID -HealthImpactClass -HealthImpactBinary, data = aqi_health_train, mtry = p, importance=TRUE)
+bag_aqi_health
+
+#Training Error
+yhat_bag_train <- predict(bag_aqi_health, newdata = aqi_health_train)
+bag_train_error <- mean((yhat_bag_train - aqi_health_train$HealthImpactScore)^2)
+
+# Testing Error
+yhat_bag_test <- predict(bag_aqi_health, newdata = aqi_health_test)
+bag_test_error <- mean((yhat_bag_test - aqi_health_test$HealthImpactScore)^2)
+
+bag_table_model_1 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(bag_train_error, bag_test_error))
+bag_table_model_1
+
+importance(bag_aqi_health)
+varImpPlot(bag_aqi_health)
+```
+
+
+### Model 2 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+bag_aqi_health <- randomForest(HealthImpactScore ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, mtry = 5, importance=TRUE)
+bag_aqi_health
+
+#Training Error
+yhat_bag_train <- predict(bag_aqi_health, newdata = aqi_health_train)
+bag_train_error <- mean((yhat_bag_train - aqi_health_train$HealthImpactScore)^2)
+
+# Testing Error
+yhat_bag_test <- predict(bag_aqi_health, newdata = aqi_health_test)
+bag_test_error <- mean((yhat_bag_test - aqi_health_test$HealthImpactScore)^2)
+
+bag_table_model_2 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(bag_train_error, bag_test_error))
+bag_table_model_2
+
+importance(bag_aqi_health)
+varImpPlot(bag_aqi_health)
+```
+
+## Random Forest
+
+Similar to all the other techniques we present two different models in which we compute for the Random Forest. Unlike bagging, we do not specificy "mtry = p" where p is the number of predictors.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactBinary
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+rf_aqi_health_model_1 <- randomForest(HealthImpactScore ~. -RecordID -HealthImpactClass, -HealthImpactBinary, data = aqi_health_train, importance=TRUE)
+rf_aqi_health_model_1
+
+#Training Error
+yhat_rf_train <- predict(rf_aqi_health_model_1, newdata = aqi_health_train)
+rf_train_error <- mean((yhat_rf_train - aqi_health_train$HealthImpactScore)^2)
+
+# Testing Error
+yhat_rf_test <- predict(rf_aqi_health_model_1, newdata = aqi_health_test)
+rf_test_error <- mean((yhat_rf_test - aqi_health_test$HealthImpactScore)^2)
+
+rf_table_model_1 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(rf_train_error, rf_test_error))
+rf_table_model_1
+
+importance(rf_aqi_health_model_1)
+varImpPlot(rf_aqi_health_model_1)
+```
+
+
+### Model 2 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+rf_aqi_health_model_2 <- randomForest(HealthImpactScore ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, importance=TRUE)
+rf_aqi_health_model_2
+
+#Training Error
+yhat_rf_train <- predict(rf_aqi_health_model_2, newdata = aqi_health_train)
+rf_train_error <- mean((yhat_rf_train - aqi_health_train$HealthImpactScore)^2)
+
+# Testing Error
+yhat_rf_test <- predict(rf_aqi_health_model_2, newdata = aqi_health_test)
+rf_test_error <- mean((yhat_rf_test - aqi_health_test$HealthImpactScore)^2)
+
+rf_table_model_1 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(rf_train_error, rf_test_error))
+rf_table_model_1
+
+importance(rf_aqi_health_model_2)
+varImpPlot(rf_aqi_health_model_2)
+
+```
+
+
+# Classification Methods
+
+### Preparing data 
+```{r}
+# Ensure outcome variable is a factor
+aqi_health_train$HealthImpactBinary <- as.factor(aqi_health_train$HealthImpactBinary)
+aqi_health_test$HealthImpactBinary <- as.factor(aqi_health_test$HealthImpactBinary)
+
+# Look at distributions
+table(aqi_health_train$HealthImpactClass)
+table(aqi_health_train$HealthImpactBinary)
+```
+
+## Logistic Regression
+Two Logistic Regression models were fit to predict HealthImpactBinary. The first logistic regression model was fit with all of the predictors besides the variables RecordID, HealthImpactClass, and HealthImpactScore. RecordID is an identifier for each of the data's covariates. The second linear regression model was fit with only the predictors identified by the lasso regression. Lasso regression does automatic feature selection so the features that were not selected in the lasso were not included within the second model. From the lasso regression we see the variables AQI, PM10, PM2_5, NO2, and O3 are the most prominent features that effect the HealthImpactScore outcome. Both models will have their train and test score evaluated.
+
++ Model 1: All coefficients besides RecordID, HealthImpactClass, and HealthImpactScore
++ Model 2: Select coefficients from Lasso Regression: AQI, PM10, PM2_5, NO2, and O3
+
+### Logistic Regression: Model 1
+
+### Model Setup
+```{r}
+glm_model_1_HealthImpactClass_fit <- glm(HealthImpactBinary ~ . -RecordID -HealthImpactClass -HealthImpactScore, data = aqi_health_train, family = binomial)
+summary(glm_model_1_HealthImpactClass_fit)
+```
+
+### Training and Testing Error
+```{r}
+# Training Error
+glm_model1_train_prob <- predict(glm_model_1_HealthImpactClass_fit, type = "response")
+glm_model1_train_class <- ifelse(glm_model1_train_prob > 0.5, 1, 0)
+glm_model1_train_train_error <- mean(glm_model1_train_class != aqi_health_train$HealthImpactBinary)
+glm_model1_train_train_error
+
+# Testing Error
+glm_model1_test_prob <- predict(glm_model_1_HealthImpactClass_fit, newdata = aqi_health_test, type = "response")
+glm_model1_test_class <- ifelse(glm_model1_test_prob > 0.5, 1, 0)
+glm_model1_test_train_error <- mean(glm_model1_test_class != aqi_health_test$HealthImpactBinary)
+glm_model1_test_train_error
+
+log_model_1 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(glm_model1_train_train_error, glm_model1_test_train_error))
+log_model_1
+```
+
+### Logistic Regression: Model 2
+
+### Model Setup
+```{r}
+glm_model_2_HealthImpactClass_fit <- glm(HealthImpactBinary ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, family = binomial)
+summary(glm_model_2_HealthImpactClass_fit)
+```
+
+### Training and Testing Error
+```{r}
+# Training Error
+glm_model2_train_prob <- predict(glm_model_2_HealthImpactClass_fit, type = "response")
+glm_model2_train_class <- ifelse(glm_model2_train_prob > 0.5, 1, 0)
+glm_model2_train_train_error <- mean(glm_model2_train_class != aqi_health_train$HealthImpactBinary)
+glm_model2_train_train_error
+
+# Testing Error
+glm_model2_test_prob <- predict(glm_model_2_HealthImpactClass_fit, newdata = aqi_health_test, type = "response")
+glm_model2_test_class <- ifelse(glm_model2_test_prob > 0.5, 1, 0)
+glm_model2_test_train_error <- mean(glm_model2_test_class != aqi_health_test$HealthImpactBinary)
+glm_model2_test_train_error
+
+log_model_2 <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(glm_model2_train_train_error, glm_model2_test_train_error))
+log_model_2
+```
+
+### KNN Classification
+
+### Standardize data
+```{r}
+# Identify test/train predictors and response variables
+train_predictors <- aqi_health_train[, !(names(aqi_health_train) %in% c("HealthImpactBinary", "HealthImpactClass", "RecordID", "HealthImpactScore"))]
+train_response <- aqi_health_train$HealthImpactBinary
+
+test_predictors <- aqi_health_test[, !(names(aqi_health_test) %in% c("HealthImpactBinary", "HealthImpactClass", "RecordID", "HealthImpactScore"))]
+test_response <- aqi_health_test$HealthImpactBinary
+
+# Standardize
+fit_knn_std <- preProcess(train_predictors, method = c("center", "scale"))
+train_predictors_std <- predict(fit_knn_std, train_predictors)
+test_predictors_std <- predict(fit_knn_std, test_predictors)
+
+# recombine HealthImpactBinary outcome variable with standardized predictors
+aqi_health_train_std_class <- cbind(train_predictors_std, HealthImpactBinary = train_response)
+aqi_health_test_std_class <- cbind(test_predictors_std, HealthImpactBinary = test_response)
+```
+
+
+### KNN Classification Model 1: All predictors except RecordID, HealthImpactClass, and HealthImpactScore (Model 1)
+
+Model 1 was fit with all the predictor variables on the standardized data. Classification error was calculated for the testing and training datasets.
+
+```{r}
+### KNN Model 1 Setup, Training Error, Testing Error
+
+# Fit the model 
+knn_class_mod1 <- knn3(HealthImpactBinary ~. , data = aqi_health_train_std_class, k = 10)
+
+# Evaluate the training error  
+knn_mod1_train_pred <- predict(knn_class_mod1, newdata = aqi_health_train_std_class, type = "class")
+knn_mod1_train_err <- mean(knn_mod1_train_pred != aqi_health_train_std_class$HealthImpactBinary)
+
+# Evaluate the testing error
+knn_mod1_test_pred <- predict(knn_class_mod1, newdata = aqi_health_test_std_class, type = "class")
+knn_mod1_test_err <- mean(knn_mod1_test_pred != aqi_health_test_std_class$HealthImpactBinary)
+
+table_knn1 <- data.frame("Error" = c("Training", "Testing"),
+                    "Value" = c(knn_mod1_train_err, knn_mod1_test_err))
+table_knn1
+```
+
+### KNN Classification Model 2: AQI, PM10, PM2_5, NO2, and O3 predictors ONLY (Model 2)
+
+Model 2 was fit with selected predictor variables on the standardized data. Classification error was calculated for the testing and training datasets.
+
+```{r}
+### KNN Model 2 Setup, Training Error, Testing Error
+
+# Fit the model 
+knn_class_mod2 <- knn3(HealthImpactBinary ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train_std_class, k = 10)
+
+# Evaluate the training error  
+knn_mod2_train_pred <- predict(knn_class_mod2, newdata = aqi_health_train_std_class, type = "class")
+knn_mod2_train_err <- mean(knn_mod2_train_pred != aqi_health_train_std_class$HealthImpactBinary)
+
+# Evaluate the testing error
+knn_mod2_test_pred <- predict(knn_class_mod2, newdata = aqi_health_test_std_class, type = "class")
+knn_mod2_test_err <- mean(knn_mod2_test_pred != aqi_health_test_std_class$HealthImpactBinary)
+
+table_knn2 <- data.frame("Error" = c("Training", "Testing"),
+                    "Value" = c(knn_mod2_train_err, knn_mod2_test_err))
+table_knn2
+```
+
+## Decision Trees: Classification
+The decision classification trees are fit the same way as logistic regression and KNN classification. Model 1 will include all of the coefficients besides the RecordId, HealthImpactClass, and HealthImpactScore. Model 2 will only include the variables identified by Lasso Regression.
+
+### Cross-validation for Decision Trees to predict HealthImpactBinary
+
+Similar to all the other techniques we present two different models in which we compute the cross validation.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactScore
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Decision Classification Tree - Cross Validation
+
+The terminal node size was calculated using cross validation techniques. These terminal nodes were then used in the final pruned tree. From the pruned tree, the classification error for the testing and training datasets was calculated. 
+
+The seed was set to (0) for all models for reproducibility.
+
+```{r}
+#set seed to zero for reproducibility
+set.seed(0)
+
+#fit the tree
+HIB_tree_model_1 <- tree(HealthImpactBinary ~ . -RecordID -HealthImpactClass -HealthImpactScore, data = aqi_health_train)
+
+#use cross validation to understand the best terminal node size
+cv_HIB <- cv.tree(HIB_tree_model_1)
+
+#create a dataframe with the size and deviation
+cv_HIB_df <- data.frame(size = cv_HIB$size, deviance = cv_HIB$dev)
+
+#find the best terminal node size
+best_size_HIB1 <- cv_HIB$size[which.min(cv_HIB$dev)]
+
+#plot to visually see the best size
+ggplot(cv_HIB_df, mapping = aes(x = size, y = deviance)) + 
+  geom_point(size = 3) + 
+  geom_line() +
+  geom_vline(xintercept = best_size_HIB1, col = "red")
+cat('CV leads to the optimal tree size as ', best_size_HIB1,'\n')
+```
+
+### Visualizing the pruned regression tree
+
+The pruned regression tree for Model 1 is visualized.
+
+```{r}
+HIB_tree_final <- prune.tree(HIB_tree_model_1, best = best_size_HIB1) #The subtree with best_size terminal nodes
+plot(HIB_tree_final)
+text(HIB_tree_final)
+```
+
+### Compute the training and testing error
+
+Compute the classification training and testing error on the Model 1 pruned tree.
+
+```{r}
+# Training Error
+pred_HIB1 <- predict(HIB_tree_final, newdata = aqi_health_train, type = "class")
+train_error_HIB1 <- mean(pred_HIB1 != aqi_health_train$HealthImpactBinary)
+
+#Testing Error
+pred_HIB1_test <- predict(HIB_tree_final, newdata = aqi_health_test, type = "class")
+test_error_HIB1 <- mean(pred_HIB1_test != aqi_health_test$HealthImpactBinary)
+
+HIB1_errors <- data.frame("Error Type" = c("Training", "Testing"),
+                    "Value" = c(train_error_HIB1, test_error_HIB1))
+HIB1_errors
+```
+
+### Model 2 Decision Classification Tree - Cross Validation
+
+The terminal node size was calculated using cross validation techniques for the predictors within Model 2. These terminal nodes were then used in the final pruned tree. From the pruned tree, the training and testing classification errors were calculated.
+
+The seed was set to (0) for all models for reproducibility.
+```{r}
+#set seed to zero for reproducibility
+set.seed(0)
+
+#fit the tree
+HIB_tree_model_2 <- tree(HealthImpactBinary ~  AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train)
+
+#use cross validation to understand the best terminal node size
+cv_HIB_ltd <- cv.tree(HIB_tree_model_2)
+
+#create a dataframe with the size and deviation
+cv_HIB_ltd_df <- data.frame(size = cv_HIB_ltd$size, deviance = cv_HIB_ltd$dev)
+
+#find the best terminal node size
+best_size_HIB2 <- cv_HIB_ltd$size[which.min(cv_HIB_ltd$dev)]
+
+#plot to visually see the best size
+ggplot(cv_HIB_ltd_df, mapping = aes(x = size, y = deviance)) + 
+  geom_point(size = 3) + 
+  geom_line() +
+  geom_vline(xintercept = best_size_HIB2, col = "red")
+cat('CV leads to the optimal tree size as ', best_size_HIB2,'\n')
+```
+
+### Visualizing the pruned regression tree
+
+The pruned regression tree for Model 2 is visualized.
+
+```{r}
+HIB_tree_final_model_2 <- prune.tree(HIB_tree_model_2, best = best_size_HIB2) #The subtree with best_size terminal nodes
+plot(HIB_tree_final_model_2)
+text(HIB_tree_final_model_2)
+```
+
+### Compute the training and testing error
+
+Compute the classification training and testing error on the Model 2 pruned tree.
+
+```{r}
+# Training Error
+pred_HIB2 <- predict(HIB_tree_final_model_2, newdata = aqi_health_train, type = "class")
+train_error_HIB2 <- mean(pred_HIB2 != aqi_health_train$HealthImpactBinary)
+
+#Testing Error
+pred_HIB2_test <- predict(HIB_tree_final_model_2, newdata = aqi_health_test, type = "class")
+test_error_HIB2 <- mean(pred_HIB2_test != aqi_health_test$HealthImpactBinary)
+
+HIB2_errors <- data.frame("Error Type" = c("Training", "Testing"),
+                    "Value" = c(train_error_HIB2, test_error_HIB2))
+HIB2_errors
+```
+
+
+## Bagging
+
+Similar to all the other techniques we present two different models in which we compute the bagging. For bagging we set p as equal to the number of predictors and specify 'mtry' as the number of variables randomly assigned as candidates for each split.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactScore
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+p <- ncol(aqi_health_train) - 4 #set p to the number of predictors. In this case it is 12 because we remove HIS, HIC, HIB, and RecordID
+##Setting mtry = p for bagging
+
+bag_hib1 <- randomForest(HealthImpactBinary ~. -RecordID -HealthImpactClass -HealthImpactScore, data = aqi_health_train, mtry = p, importance=TRUE)
+bag_hib1
+
+#Training Error
+yhat_bag_train_class1 <- predict(bag_hib1, newdata = aqi_health_train, type = "class")
+bag_train_error1 <- mean(yhat_bag_train_class1 != aqi_health_train$HealthImpactBinary)
+
+# Testing Error
+yhat_bag_test_class1 <- predict(bag_hib1, newdata = aqi_health_test)
+bag_test_error1 <- mean(yhat_bag_test_class1 != aqi_health_test$HealthImpactBinary)
+
+bag_hib1_errors <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(bag_train_error1, bag_test_error1))
+bag_hib1_errors
+
+importance(bag_hib1)
+varImpPlot(bag_hib1)
+```
+
+
+### Model 2 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+# Model Setup
+bag_hib2 <- randomForest(HealthImpactBinary ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, mtry = 5, importance=TRUE)
+bag_hib2
+
+#Training Error
+yhat_bag_train_class2 <- predict(bag_hib2, newdata = aqi_health_train, type = "class")
+bag_train_error2 <- mean(yhat_bag_train_class2 != aqi_health_train$HealthImpactBinary)
+
+# Testing Error
+yhat_bag_test_class2 <- predict(bag_hib2, newdata = aqi_health_test)
+bag_test_error2 <- mean(yhat_bag_test_class2 != aqi_health_test$HealthImpactBinary)
+
+bag_hib2_errors <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(bag_train_error2, bag_test_error2))
+bag_hib2_errors
+
+importance(bag_hib2)
+varImpPlot(bag_hib2)
+```
+
+
+## Random Forest
+
+Similar to all the other techniques we present two different models in which we compute for the Random Forest. Unlike bagging, we do not specificy "mtry = p" where p is the number of predictors.
+
++ Model 1: All variables besides the RecordID, HealthImpactClass, and HealthImpactScore
++ Model 2: Variable only selected by the variables identified in the lasso regression: AQI + PM10 + PM2_5 + NO2 + O3
+
+### Model 1 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+rf_hib_model_1 <- randomForest(HealthImpactBinary ~. -RecordID -HealthImpactClass -HealthImpactScore, data = aqi_health_train, importance=TRUE)
+rf_hib_model_1
+
+#Training Error
+yhat_rf_train_class1 <- predict(rf_hib_model_1, newdata = aqi_health_train, type = "class")
+rf_train_error1 <- mean(yhat_rf_train_class1 != aqi_health_train$HealthImpactBinary)
+
+# Testing Error
+yhat_rf_test_class1 <- predict(rf_hib_model_1, newdata = aqi_health_test, type = "class")
+rf_test_error1 <- mean(yhat_rf_test_class1 != aqi_health_test$HealthImpactBinary)
+
+rf_hib1_errors <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(rf_train_error1, rf_test_error1))
+rf_hib1_errors
+
+importance(rf_hib_model_1)
+varImpPlot(rf_hib_model_1)
+```
+
+
+### Model 2 Setup, Training Error, and Testing Error
+```{r}
+set.seed(0)
+
+rf_hib_model_2 <- randomForest(HealthImpactBinary ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, importance=TRUE)
+rf_hib_model_2
+
+#Training Error
+yhat_rf_train_class2 <- predict(rf_hib_model_2, newdata = aqi_health_train, type = "class")
+rf_train_error2 <- mean(yhat_rf_train_class2 != aqi_health_train$HealthImpactBinary)
+
+# Testing Error
+yhat_rf_test_class2 <- predict(rf_hib_model_2, newdata = aqi_health_test, type = "class")
+rf_test_error2 <- mean(yhat_rf_test_class2 != aqi_health_test$HealthImpactBinary)
+
+rf_hib2_errors <- data.frame("Error" = c("Training","Testing"),
+                                "Value" = c(rf_train_error2, rf_test_error2))
+rf_hib2_errors
+
+importance(rf_hib_model_2)
+varImpPlot(rf_hib_model_2)
+
+
+rf_aqi_health_model_2 <- randomForest(HealthImpactScore ~ AQI + PM10 + PM2_5 + NO2 + O3, data = aqi_health_train, importance=TRUE)
+rf_aqi_health_model_2
+```
+
